@@ -1,0 +1,157 @@
+import simplejson as json
+import random
+
+def DecideInput(node):
+    seed = node.parm('seed').eval()
+    varSeed = node.parm('varSeed').eval()
+    
+    actualSeed = seed + (varSeed+11)*22
+    
+    random.seed(seed)
+    
+    biases = [vt[1] for vt in GetEntries(node)]
+    #print biases
+    the_index = SelectBiasIndex(biases)
+    node.parm('reference').set(the_index)
+    node.parm('actualOutput').set(the_index)
+       
+def SelectBiasIndex(biases):
+    cumuBiases = [0]
+    for b in biases:
+        cumuBiases.append(cumuBiases[-1]+b)
+
+    cumuBiases = [cB/float(cumuBiases[-1]) for cB in cumuBiases]
+
+    curNum = random.uniform(0, 1)
+
+    curIter = 0
+    while curIter < (len(cumuBiases)-1):
+        if cumuBiases[curIter] <= curNum < cumuBiases[curIter + 1]:
+            break
+        else:
+            curIter += 1
+
+    return curIter
+    
+    
+def UpdateValues(node):
+    json_obj = json.loads(node.parm('serializationString').eval())
+    entries = json_obj['entries']
+    
+    for e in entries:
+        parm_name = e[0] + '_bias'
+        value = node.parm(parm_name).eval()
+        e[1] = value
+        
+    node.parm('serializationString').set( json.dumps(json_obj) )
+    
+    DecideInput(node)
+        
+
+
+def Initialize(node):
+    header = {}
+    entries = {}
+    
+    the_dict = {'header': header, 'entries': entries}
+    
+    the_string = json.dumps(the_dict)
+    
+    node.parm('serializationString').set(the_string)
+    
+    
+    
+def UpdateGUI(node, inputs, value_tuple_list):
+    template_group = node.type().parmTemplateGroup()
+    
+    node.setParmTemplateGroup(template_group)
+    
+    folder_type = hou.folderType.Simple
+    
+    print value_tuple_list
+    
+    for input in inputs:
+        name = input.name() + '_bias'
+        label = input.name() + ' Bias'
+        callback = "kwargs['node'].hdaModule().UpdateValues(kwargs['node'])"
+        pt = hou.FloatParmTemplate(name, label, 1, min=0, max=1, script_callback=callback, script_callback_language=hou.scriptLanguage.Python)
+        
+        if node.parm(name) is not None:
+            continue
+        
+        
+        node.addSpareParmTuple(pt, ('Main', 'Inputs'))
+        
+        
+        singles = [vt[0] for vt in value_tuple_list]
+        try:
+            index = singles.index(input.name())
+            node.parm(name).set(value_tuple_list[index][1])
+        except ValueError:
+            node.parm(name).set(1)
+
+            
+def GetEntries(node):
+    serialize_string = node.parm('serializationString').eval()
+    
+    return json.loads(serialize_string)['entries']            
+
+    
+def UpdateBiases(node):
+    the_string = node.parm('serializationString').eval()
+    
+    json_obj = json.loads(the_string)
+    
+    entries = json_obj['entries']
+    
+    for e in entries.keys():
+        ### e is key
+        parm_name = e + '_bias'
+        entries[e] = node.parm(parm_name).eval()
+        
+    node.parm('serializationString').set(json.dumps(json_obj))
+    
+    
+def UpdateEntries(node):
+    do_initialize = False
+    
+    the_string = node.parm('serializationString').eval()
+    
+    if the_string == '' or the_string.isspace():
+        do_initialize = True
+    else:
+        try: 
+            json_obj = json.loads(the_string) 
+        except ValueError as e: 
+            do_intialize = True
+      
+    if do_initialize:
+        Initialize(node)
+        json_obj = json.loads(node.parm('serializationString').eval())
+
+    switch = node.node(node.path() + '/switch1')
+    
+    inputs = switch.inputs()
+    input_names = [input.name() for input in inputs]
+    
+    old_entries = json_obj['entries']
+    singles = [ vt[0] for vt in old_entries ]
+    
+    
+    UpdateGUI(node, inputs, old_entries)
+    
+    
+    def GetOldValue(input_name):
+        try:
+            index = singles.index(input_name)
+            return old_entries[index][1]
+        except ValueError:
+            return 1.0
+         
+    
+    new_entries = [(input_names[i], GetOldValue(input_names[i])) for i in range(len(input_names))]
+    
+    json_obj['entries'] = new_entries
+    
+    node.parm('serializationString').set(json.dumps(json_obj))
+    
